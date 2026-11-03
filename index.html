@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0f1512">
+<meta name="description" content="Live leaf classifier running in the browser on a phone camera, powered by an ONNX model and onnxruntime-web.">
+<meta name="og:title" content="Leaf classifier — live camera demo">
+<meta name="og:description" content="Point your phone camera at a leaf. The model runs entirely on your device.">
+<meta name="og:url" content="https://bohuslavskaa.github.io/mlr-ex08/">
+<link rel="canonical" href="https://bohuslavskaa.github.io/mlr-ex08/">
+<title>Leaf classifier — live camera demo</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%235fd08a' d='M11 21C7.1 21 4 17.9 4 14c0-5 4.5-9.4 14-10 0 9.9-4 17-7 17zm-6 1c0-3 1.9-5.4 5.1-6'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#0f1512; --panel:#171f1b; --panel2:#1e2822; --line:#2b3a33;
+    --fg:#e9f0ec; --dim:#9db0a6; --accent:#5fd08a; --accent2:#2f7d52; --warn:#f0b64a; --bad:#ef6d6d;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--fg);
+    font:16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding:0 0 calc(28px + env(safe-area-inset-bottom));
+    -webkit-text-size-adjust:100%;
+  }
+  main{max-width:520px;margin:0 auto;padding:calc(14px + env(safe-area-inset-top)) 16px 0}
+  h1{font-size:1.32rem;margin:0 0 2px;letter-spacing:.2px}
+  .meta{color:var(--dim);font-size:.8rem;margin:0 0 14px}
+  .stage{
+    position:relative;width:100%;aspect-ratio:1/1;background:#000;border-radius:14px;overflow:hidden;
+    border:1px solid var(--line);
+  }
+  video{width:100%;height:100%;object-fit:cover;display:block;background:#000;transform:translateZ(0)}
+  .placeholder{
+    position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:10px;text-align:center;color:var(--dim);font-size:.9rem;padding:24px;
+  }
+  .placeholder svg{opacity:.75}
+  .crop-guide{position:absolute;inset:11%;border-radius:10px;pointer-events:none;opacity:.9}
+  .crop-guide span{position:absolute;width:22px;height:22px;border:2px solid rgba(255,255,255,.8)}
+  .crop-guide span:nth-child(1){top:0;left:0;border-right:0;border-bottom:0;border-radius:10px 0 0 0}
+  .crop-guide span:nth-child(2){top:0;right:0;border-left:0;border-bottom:0;border-radius:0 10px 0 0}
+  .crop-guide span:nth-child(3){bottom:0;left:0;border-right:0;border-top:0;border-radius:0 0 0 10px}
+  .crop-guide span:nth-child(4){bottom:0;right:0;border-left:0;border-top:0;border-radius:0 0 10px 0}
+  .badge{
+    position:absolute;top:8px;left:8px;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);color:#fff;font-size:.7rem;padding:4px 9px;border-radius:999px;
+    font-variant-numeric:tabular-nums;display:none;
+  }
+  .badge.on{display:block}
+  .badge.err{background:rgba(120,30,30,.72)}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 4px}
+  button,label.btn{
+    appearance:none;-webkit-appearance:none;font:inherit;font-size:.92rem;font-weight:600;
+    color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:11px;
+    padding:11px 14px;cursor:pointer;flex:1 1 auto;text-align:center;
+    -webkit-tap-highlight-color:transparent;touch-action:manipulation;user-select:none;
+  }
+  button:active,label.btn:active{transform:translateY(1px)}
+  button.primary{background:var(--accent2);border-color:#3d9a67;color:#fff}
+  button:disabled,label.btn.disabled{opacity:.45;cursor:default}
+  input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+  .headline{
+    margin:14px 0 10px;padding:13px 15px;background:var(--panel);border:1px solid var(--line);
+    border-radius:13px;display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  }
+  .headline .cls{font-size:1.3rem;font-weight:700;letter-spacing:.2px}
+  .headline .pct{font-size:1.3rem;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
+  .headline.idle .cls,.headline.idle .pct{color:var(--dim);font-weight:600;font-size:1rem}
+  ol.bars{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+  ol.bars li{display:grid;grid-template-columns:5.4rem 1fr 4.6rem;align-items:center;gap:10px;font-size:.9rem}
+  ol.bars .name{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  ol.bars li.top .name{color:var(--fg);font-weight:700}
+  .track{position:relative;height:11px;background:var(--panel2);border-radius:999px;overflow:hidden;border:1px solid var(--line)}
+  .fill{position:absolute;inset:0;transform-origin:left center;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:999px;width:100%}
+  ol.bars li:not(.top) .fill{opacity:.5}
+  .pval{text-align:right;font-variant-numeric:tabular-nums;color:var(--dim)}
+  ol.bars li.top .pval{color:var(--fg);font-weight:700}
+  .note{color:var(--dim);font-size:.76rem;margin:10px 2px 0}
+  .status{
+    margin:10px 2px 0;font-size:.82rem;color:var(--dim);min-height:1.2em;
+    overflow-wrap:anywhere;
+  }
+  .status.err{color:var(--bad)}
+  .status.ok{color:var(--accent)}
+  hr{border:0;border-top:1px solid var(--line);margin:22px 0 16px}
+  .qr{display:flex;gap:18px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:15px}
+  .qr figure{margin:0;flex:0 0 auto;background:#fff;padding:8px;border-radius:10px;line-height:0}
+  .qr svg,.qr img{display:block;width:152px;height:152px}
+  #qrSymbol{display:block;line-height:0}
+  .qr figcaption{color:#3c4a42;font-size:.66rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-top:5px;text-align:center;line-height:1.3}
+  .qr .txt{min-width:0}
+  .qr h2{font-size:.95rem;margin:0 0 5px}
+  .qr p{margin:0 0 8px;color:var(--dim);font-size:.8rem}
+  .qr a.url{
+    display:inline-block;font-size:.84rem;color:var(--accent);text-decoration:underline;
+    overflow-wrap:anywhere;font-weight:600;
+  }
+  @media (max-width:430px){
+    .qr{flex-direction:column;align-items:flex-start;gap:12px}
+  }
+  .selftest{margin:14px 0 0;font-size:.8rem;color:var(--dim)}
+  .selftest a{color:var(--dim)}
+  footer{margin-top:18px;color:var(--dim);font-size:.74rem}
+  @media (prefers-color-scheme: light){
+    :root{--bg:#f4f6f4;--panel:#fff;--panel2:#e9eee9;--line:#d5ded6;--fg:#14201a;--dim:#5b6d63;--accent:#1d8a4e;--accent2:#2b7d51}
+    .stage{background:#dfe5df}
+    .qr figure{background:#fff;border:1px solid var(--line)}
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Leaf classifier</h1>
+  <p class="meta" id="modelMeta">MobileNetV3 · ONNX · runs on this device — no photos are uploaded.</p>
+
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted autoplay disablepictureinpicture></video>
+    <div class="crop-guide" id="cropGuide" hidden><span></span><span></span><span></span><span></span></div>
+    <div class="badge" id="badge"></div>
+    <div class="placeholder" id="placeholder">
+      <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/>
+      </svg>
+      <span id="placeholderText">Point your phone’s rear camera at a leaf.</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="startBtn" class="primary">Start camera</button>
+    <button id="flipBtn" disabled>Switch camera</button>
+    <label class="btn" for="fileInput" id="uploadLabel">Upload photo</label>
+    <input type="file" id="fileInput" accept="image/*">
+  </div>
+
+  <p class="status" id="status">Loading the model…</p>
+
+  <div class="headline idle" id="headline" aria-live="polite">
+    <span class="cls" id="topName">no result yet</span>
+    <span class="pct" id="topPct">—</span>
+  </div>
+
+  <ol class="bars" id="bars"></ol>
+
+  <p class="note">Each frame is cropped to its central square, resized, and standardized exactly as described in <code>model_info.json</code>. Bars show the softmax probability of every class.</p>
+
+  <div class="selftest">
+    <label style="cursor:pointer"><input type="checkbox" id="selftestToggle" style="margin-right:6px">Self-check mode (uses the bundled <code>check_image.jpg</code> instead of the camera)</label>
+    <div id="selftestResult"></div>
+  </div>
+
+  <hr>
+
+  <!--QR-BLOCK-START-->
+  <section class="qr" aria-labelledby="qrHeading">
+    <figure>
+      <span id="qrSymbol" role="img" aria-label="QR code that opens https://bohuslavskaa.github.io/mlr-ex08/"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 41 41" aria-hidden="true" focusable="false" shape-rendering="crispEdges"><rect width="41" height="41" fill="#ffffff"/><path fill="#000000" d="M4 4h7v1h-7zM13 4h2v1h-2zM17 4h3v1h-3zM21 4h4v1h-4zM27 4h1v1h-1zM30 4h7v1h-7zM4 5h1v1h-1zM10 5h1v1h-1zM12 5h6v1h-6zM20 5h1v1h-1zM22 5h1v1h-1zM24 5h1v1h-1zM27 5h2v1h-2zM30 5h1v1h-1zM36 5h1v1h-1zM4 6h1v1h-1zM6 6h3v1h-3zM10 6h1v1h-1zM12 6h3v1h-3zM16 6h1v1h-1zM21 6h1v1h-1zM24 6h1v1h-1zM26 6h2v1h-2zM30 6h1v1h-1zM32 6h3v1h-3zM36 6h1v1h-1zM4 7h1v1h-1zM6 7h3v1h-3zM10 7h1v1h-1zM14 7h2v1h-2zM19 7h2v1h-2zM23 7h2v1h-2zM30 7h1v1h-1zM32 7h3v1h-3zM36 7h1v1h-1zM4 8h1v1h-1zM6 8h3v1h-3zM10 8h1v1h-1zM13 8h2v1h-2zM17 8h1v1h-1zM21 8h1v1h-1zM24 8h3v1h-3zM28 8h1v1h-1zM30 8h1v1h-1zM32 8h3v1h-3zM36 8h1v1h-1zM4 9h1v1h-1zM10 9h1v1h-1zM13 9h6v1h-6zM20 9h5v1h-5zM28 9h1v1h-1zM30 9h1v1h-1zM36 9h1v1h-1zM4 10h7v1h-7zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM26 10h1v1h-1zM28 10h1v1h-1zM30 10h7v1h-7zM13 11h1v1h-1zM15 11h1v1h-1zM17 11h1v1h-1zM19 11h1v1h-1zM21 11h2v1h-2zM24 11h1v1h-1zM27 11h2v1h-2zM5 12h3v1h-3zM9 12h2v1h-2zM16 12h4v1h-4zM21 12h3v1h-3zM25 12h1v1h-1zM28 12h1v1h-1zM34 12h2v1h-2zM7 13h2v1h-2zM12 13h1v1h-1zM17 13h2v1h-2zM20 13h1v1h-1zM22 13h2v1h-2zM25 13h1v1h-1zM27 13h1v1h-1zM30 13h2v1h-2zM33 13h4v1h-4zM6 14h3v1h-3zM10 14h1v1h-1zM14 14h1v1h-1zM16 14h1v1h-1zM18 14h4v1h-4zM27 14h3v1h-3zM31 14h3v1h-3zM35 14h2v1h-2zM4 15h2v1h-2zM8 15h1v1h-1zM14 15h1v1h-1zM16 15h1v1h-1zM18 15h1v1h-1zM22 15h2v1h-2zM26 15h1v1h-1zM28 15h1v1h-1zM30 15h2v1h-2zM33 15h1v1h-1zM35 15h1v1h-1zM5 16h1v1h-1zM7 16h1v1h-1zM9 16h3v1h-3zM13 16h2v1h-2zM20 16h1v1h-1zM22 16h1v1h-1zM28 16h2v1h-2zM31 16h3v1h-3zM36 16h1v1h-1zM4 17h1v1h-1zM6 17h4v1h-4zM11 17h1v1h-1zM15 17h1v1h-1zM17 17h1v1h-1zM21 17h2v1h-2zM26 17h1v1h-1zM28 17h1v1h-1zM35 17h1v1h-1zM4 18h1v1h-1zM6 18h1v1h-1zM10 18h1v1h-1zM12 18h1v1h-1zM18 18h5v1h-5zM26 18h1v1h-1zM28 18h1v1h-1zM30 18h2v1h-2zM33 18h1v1h-1zM4 19h1v1h-1zM6 19h1v1h-1zM11 19h1v1h-1zM13 19h1v1h-1zM19 19h3v1h-3zM23 19h4v1h-4zM29 19h2v1h-2zM32 19h3v1h-3zM4 20h1v1h-1zM9 20h4v1h-4zM14 20h2v1h-2zM23 20h4v1h-4zM28 20h3v1h-3zM32 20h3v1h-3zM4 21h1v1h-1zM7 21h2v1h-2zM11 21h3v1h-3zM15 21h3v1h-3zM19 21h1v1h-1zM21 21h1v1h-1zM24 21h2v1h-2zM27 21h4v1h-4zM32 21h2v1h-2zM35 21h2v1h-2zM4 22h1v1h-1zM8 22h3v1h-3zM12 22h2v1h-2zM16 22h2v1h-2zM24 22h2v1h-2zM28 22h5v1h-5zM34 22h2v1h-2zM4 23h4v1h-4zM12 23h5v1h-5zM19 23h1v1h-1zM21 23h1v1h-1zM24 23h1v1h-1zM27 23h1v1h-1zM29 23h2v1h-2zM32 23h1v1h-1zM36 23h1v1h-1zM4 24h1v1h-1zM9 24h2v1h-2zM12 24h3v1h-3zM19 24h2v1h-2zM22 24h6v1h-6zM33 24h2v1h-2zM4 25h1v1h-1zM8 25h1v1h-1zM12 25h1v1h-1zM16 25h1v1h-1zM19 25h1v1h-1zM21 25h2v1h-2zM25 25h1v1h-1zM27 25h2v1h-2zM30 25h1v1h-1zM34 25h1v1h-1zM36 25h1v1h-1zM7 26h2v1h-2zM10 26h1v1h-1zM13 26h1v1h-1zM15 26h4v1h-4zM21 26h1v1h-1zM25 26h3v1h-3zM30 26h2v1h-2zM33 26h4v1h-4zM5 27h1v1h-1zM9 27h1v1h-1zM12 27h1v1h-1zM16 27h2v1h-2zM19 27h5v1h-5zM26 27h2v1h-2zM29 27h2v1h-2zM35 27h1v1h-1zM4 28h1v1h-1zM6 28h2v1h-2zM9 28h2v1h-2zM13 28h4v1h-4zM19 28h1v1h-1zM22 28h1v1h-1zM26 28h1v1h-1zM28 28h5v1h-5zM36 28h1v1h-1zM12 29h1v1h-1zM14 29h1v1h-1zM16 29h3v1h-3zM22 29h2v1h-2zM25 29h4v1h-4zM32 29h2v1h-2zM35 29h1v1h-1zM4 30h7v1h-7zM13 30h1v1h-1zM16 30h1v1h-1zM19 30h1v1h-1zM23 30h3v1h-3zM27 30h2v1h-2zM30 30h1v1h-1zM32 30h1v1h-1zM4 31h1v1h-1zM10 31h1v1h-1zM12 31h3v1h-3zM17 31h1v1h-1zM19 31h2v1h-2zM23 31h1v1h-1zM25 31h4v1h-4zM32 31h4v1h-4zM4 32h1v1h-1zM6 32h3v1h-3zM10 32h1v1h-1zM13 32h1v1h-1zM17 32h3v1h-3zM21 32h1v1h-1zM23 32h2v1h-2zM27 32h6v1h-6zM34 32h1v1h-1zM4 33h1v1h-1zM6 33h3v1h-3zM10 33h1v1h-1zM12 33h1v1h-1zM14 33h1v1h-1zM16 33h1v1h-1zM19 33h2v1h-2zM22 33h3v1h-3zM26 33h3v1h-3zM31 33h1v1h-1zM33 33h4v1h-4zM4 34h1v1h-1zM6 34h3v1h-3zM10 34h1v1h-1zM12 34h1v1h-1zM14 34h3v1h-3zM18 34h2v1h-2zM21 34h1v1h-1zM23 34h1v1h-1zM27 34h1v1h-1zM30 34h2v1h-2zM4 35h1v1h-1zM10 35h1v1h-1zM12 35h1v1h-1zM16 35h3v1h-3zM21 35h3v1h-3zM26 35h1v1h-1zM28 35h2v1h-2zM31 35h2v1h-2zM36 35h1v1h-1zM4 36h7v1h-7zM13 36h1v1h-1zM16 36h3v1h-3zM21 36h1v1h-1zM25 36h1v1h-1zM27 36h1v1h-1zM29 36h1v1h-1zM32 36h1v1h-1zM34 36h1v1h-1z"/></svg></span>
+      <figcaption>QR code</figcaption>
+    </figure>
+    <div class="txt">
+      <h2 id="qrHeading">Scan this QR code to open the page on your phone</h2>
+      <p>Point another phone’s camera at the code, or tap the link.</p>
+      <a class="url" href="https://bohuslavskaa.github.io/mlr-ex08/">https://bohuslavskaa.github.io/mlr-ex08/</a>
+    </div>
+  </section>
+  <!--QR-BLOCK-END-->
+
+  <footer>
+    <p>Model: <code>leaf_model.onnx</code> (4 classes) · inference by onnxruntime-web (WebAssembly) · no server side.</p>
+  </footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.min.js"></script>
+<script>
+'use strict';
+/* =========================================================================
+   Leaf classifier.  Preprocessing follows model_info.json exactly:
+     central square crop -> resize to input_size -> /255 -> (x-mean)/std
+     -> float32 CHW tensor of shape 1 x 3 x input_size x input_size
+   The exported graph ends at the classifier GEMM, i.e. it returns raw
+   logits, so softmax is applied here to obtain probabilities.
+   ========================================================================= */
+
+var MODEL_URL  = 'leaf_model.onnx';
+var INFO_URL   = 'model_info.json';
+var CHECK_IMAGE = 'check_image.jpg';
+var CHECK_EXPECTED = 'check_expected.json';
+var ORT_WASM_PATHS = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
+var MIN_FRAME_INTERVAL_MS = 140;   // ~7 inferences/s max, keeps the phone cool
+var SMOOTH_ALPHA = 0.35;           // temporal smoothing of live results only
+
+/* --- PREPROCESS-BEGIN (pure functions, shared by camera and upload paths) --- */
+function centralSquare(srcW, srcH) {
+  var side = Math.min(srcW, srcH);
+  return { sx: (srcW - side) / 2, sy: (srcH - side) / 2, side: side };
+}
+
+/* Standardize an RGBA byte buffer of a size x size square image into a
+   float32 CHW tensor buffer (1 x 3 x size x size). */
+function normalizeRgbaToChw(rgba, size, mean, std) {
+  var plane = size * size;
+  var out = new Float32Array(3 * plane);
+  var mR = mean[0], mG = mean[1], mB = mean[2];
+  var sR = std[0],  sG = std[1],  sB = std[2];
+  for (var i = 0, j = 0; i < plane; i++, j += 4) {
+    out[i]            = (rgba[j]     / 255 - mR) / sR;
+    out[plane + i]    = (rgba[j + 1] / 255 - mG) / sG;
+    out[2 * plane + i]= (rgba[j + 2] / 255 - mB) / sB;
+  }
+  return out;
+}
+
+/* Numerically stable softmax over the model's raw output vector. */
+function softmax(logits) {
+  var max = -Infinity, i, sum = 0, out = new Array(logits.length);
+  for (i = 0; i < logits.length; i++) if (logits[i] > max) max = logits[i];
+  for (i = 0; i < logits.length; i++) { out[i] = Math.exp(logits[i] - max); sum += out[i]; }
+  for (i = 0; i < logits.length; i++) out[i] /= sum;
+  return out;
+}
+/* --- PREPROCESS-END --- */
+
+/* Downscale step: halve towards the target size so that large camera or
+   photo frames are area-averaged instead of badly aliased by a single
+   bilinear jump. */
+function nextStep(cur, target) { return Math.max(target, Math.floor(cur / 2)); }
+
+var $ = function (id) { return document.getElementById(id); };
+var video = $('video'), stage = $('stage'), barsEl = $('bars'), statusEl = $('status'),
+    badgeEl = $('badge'), placeholder = $('placeholder'), placeholderText = $('placeholderText'),
+    cropGuide = $('cropGuide'), startBtn = $('startBtn'), flipBtn = $('flipBtn'),
+    fileInput = $('fileInput'), uploadLabel = $('uploadLabel'), headline = $('headline'),
+    topName = $('topName'), topPct = $('topPct'), modelMeta = $('modelMeta'),
+    selftestToggle = $('selftestToggle'), selftestResult = $('selftestResult');
+
+var info = null, session = null, inputName = null, outputName = null;
+var workA = document.createElement('canvas'), workB = document.createElement('canvas');
+var ctxA = workA.getContext('2d', { willReadFrequently: true });
+var ctxB = workB.getContext('2d', { willReadFrequently: true });
+
+var running = false, inferenceBusy = false, rafId = 0, lastFrameAt = 0;
+var stream = null, facing = 'environment', haveRear = false, haveFront = false;
+var smoothed = null, selfTestMode = false;
+var fpsAvg = 0, lastInferenceAt = 0;
+
+function setStatus(msg, kind) {
+  statusEl.textContent = msg || '';
+  statusEl.className = 'status' + (kind === 'err' ? ' err' : kind === 'ok' ? ' ok' : '');
+}
+function setBadge(msg, isErr) {
+  if (!msg) { badgeEl.className = 'badge'; badgeEl.textContent = ''; return; }
+  badgeEl.className = 'badge on' + (isErr ? ' err' : '');
+  badgeEl.textContent = msg;
+}
+
+function formatProb(p) {
+  if (!isFinite(p) || p <= 0) return '0%';
+  var pct = p * 100;
+  if (pct >= 10) return pct.toFixed(1) + '%';
+  if (pct >= 1) return pct.toFixed(2) + '%';
+  if (pct >= 0.0001) return Number(pct.toPrecision(2)) + '%';
+  return '<0.0001%';
+}
+
+/* ---------- model ---------- */
+
+function fetchWithProgress(url, onProgress) {
+  return fetch(url).then(function (res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' for ' + url);
+    var total = parseInt(res.headers.get('Content-Length') || '0', 10);
+    if (!res.body || !res.body.getReader) return res.arrayBuffer();
+    var reader = res.body.getReader(), chunks = [], got = 0;
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) {
+          var buf = new Uint8Array(got), off = 0;
+          for (var i = 0; i < chunks.length; i++) { buf.set(chunks[i], off); off += chunks[i].length; }
+          return buf.buffer;
+        }
+        chunks.push(r.value); got += r.value.length;
+        if (onProgress) onProgress(got, total);
+        return pump();
+      });
+    }
+    return pump();
+  });
+}
+
+function loadInfo() {
+  return fetch(INFO_URL, { cache: 'force-cache' }).then(function (res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' reading ' + INFO_URL);
+    return res.json();
+  }).then(function (j) {
+    if (!j || !Array.isArray(j.classes) || !j.input_size || !Array.isArray(j.mean) || !Array.isArray(j.std))
+      throw new Error('unexpected model_info.json');
+    info = j;
+    modelMeta.textContent = info.classes.length + ' classes · ' + info.input_size + '×' + info.input_size +
+      ' input · runs on this device, nothing is uploaded.';
+    buildRows();
+  });
+}
+
+function loadModel() {
+  if (!window.ort) return Promise.reject(new Error('onnxruntime-web did not load from the CDN.'));
+  var env = window.ort.env.wasm;
+  env.wasmPaths = ORT_WASM_PATHS;
+  env.numThreads = 1;   // GitHub Pages sends no COOP/COEP headers, so SAB/threads are unavailable
+  env.proxy = false;
+  setBadge('loading model 0%', false);
+  return fetchWithProgress(MODEL_URL, function (got, total) {
+    setBadge(total ? 'model ' + Math.floor(got / total * 100) + '%' : 'model ' + (got / 1048576).toFixed(1) + ' MB', false);
+  }).then(function (buffer) {
+    return window.ort.InferenceSession.create(buffer, {
+      executionProviders: ['wasm'],
+      graphOptimizationLevel: 'all',
+      logSeverityLevel: 3
+    });
+  }).then(function (s) {
+    session = s;
+    inputName = s.inputNames[0];
+    outputName = s.outputNames[0];
+    setBadge('', false);
+    var meta = (s.inputMetadata || s.inputMeta || {})[inputName];
+    console.log('session ready: input', inputName, JSON.stringify(meta && (meta.shape || meta.dimensions)), '-> output', outputName);
+  });
+}
+
+/* ---------- inference ---------- */
+
+function sizeCanvas(canvas, ctx, side) {
+  if (canvas.width !== side || canvas.height !== side) { canvas.width = side; canvas.height = side; }
+  ctx.imageSmoothingEnabled = true;
+  try { ctx.imageSmoothingQuality = 'high'; } catch (e) {}
+  return ctx;
+}
+
+/* Crop the central square out of `source` (video / bitmap / img), resize it to
+   size x size and return its RGBA bytes. */
+function grabCentralSquareRgba(source, srcW, srcH, size) {
+  var c = centralSquare(srcW, srcH);
+  var side = Math.round(c.side);
+  if (side < 1) throw new Error('empty frame');
+
+  var useA = true;
+  var curCanvas = workA, curCtx = ctxA;
+  var curSide = Math.max(size, Math.min(side, Math.ceil(side / 2)));
+  sizeCanvas(workA, ctxA, curSide);
+  ctxA.drawImage(source, c.sx, c.sy, c.side, c.side, 0, 0, curSide, curSide);
+
+  while (curSide > size) {
+    var nextSide = nextStep(curSide, size);
+    var dst = useA ? workB : workA;
+    var dstCtx = useA ? ctxB : ctxA;
+    sizeCanvas(dst, dstCtx, nextSide);
+    dstCtx.drawImage(curCanvas, 0, 0, curSide, curSide, 0, 0, nextSide, nextSide);
+    curCanvas = dst; curCtx = dstCtx;
+    curSide = nextSide; useA = !useA;
+  }
+  return curCtx.getImageData(0, 0, size, size).data;
+}
+
+/* Full pipeline for one source image: crop -> resize -> normalize -> run. */
+function classifySource(source, srcW, srcH) {
+  if (!session || !info) return Promise.reject(new Error('model not ready'));
+  var size = info.input_size;
+  var rgba = grabCentralSquareRgba(source, srcW, srcH, size);
+  var data = normalizeRgbaToChw(rgba, size, info.mean, info.std);
+  var tensor = new window.ort.Tensor('float32', data, [1, 3, size, size]);
+  var feeds = {};
+  feeds[inputName] = tensor;
+  return session.run(feeds).then(function (out) {
+    var values = out[outputName].data;
+    var logits = [];
+    for (var i = 0; i < values.length; i++) logits.push(values[i]);
+    return { probs: softmax(logits), logits: logits };
+  });
+}
+
+/* ---------- rendering ---------- */
+
+function buildRows() {
+  barsEl.innerHTML = '';
+  info.classes.forEach(function (name) {
+    var li = document.createElement('li');
+    li.innerHTML = '<span class="name"></span><span class="track"><span class="fill"></span></span><span class="pval">—</span>';
+    li.querySelector('.name').textContent = name;
+    barsEl.appendChild(li);
+  });
+  smoothed = null;
+}
+
+function render(probs) {
+  var items = barsEl.children, top = 0, i;
+  for (i = 1; i < probs.length; i++) if (probs[i] > probs[top]) top = i;
+  for (i = 0; i < items.length && i < probs.length; i++) {
+    var li = items[i], p = probs[i] || 0;
+    li.classList.toggle('top', i === top);
+    li.querySelector('.fill').style.transform = 'scaleX(' + Math.max(0.0015, p).toFixed(5) + ')';
+    li.querySelector('.pval').textContent = formatProb(p);
+  }
+  headline.classList.remove('idle');
+  topName.textContent = info.classes[top] || '—';
+  topPct.textContent = formatProb(probs[top]);
+}
+
+function renderIdle(text) {
+  headline.classList.add('idle');
+  topName.textContent = text || 'no result yet';
+  topPct.textContent = '—';
+  var items = barsEl.children;
+  for (var i = 0; i < items.length; i++) {
+    items[i].classList.remove('top');
+    items[i].querySelector('.fill').style.transform = 'scaleX(0)';
+    items[i].querySelector('.pval').textContent = '—';
+  }
+}
+
+function smooth(probs) {
+  if (!smoothed || smoothed.length !== probs.length) smoothed = probs.slice();
+  else for (var i = 0; i < probs.length; i++) smoothed[i] += SMOOTH_ALPHA * (probs[i] - smoothed[i]);
+  var sum = 0;
+  for (var k = 0; k < smoothed.length; k++) sum += smoothed[k];
+  if (sum > 0) for (var j = 0; j < smoothed.length; j++) smoothed[j] /= sum;
+  return smoothed;
+}
+
+/* ---------- live camera loop ---------- */
+
+function loop() {
+  rafId = requestAnimationFrame(loop);
+  if (!running || inferenceBusy || selfTestMode) return;
+  if (document.hidden || !session) return;
+  if (video.readyState < 2 || !video.videoWidth) return;
+  var now = performance.now();
+  if (now - lastFrameAt < MIN_FRAME_INTERVAL_MS) return;
+  lastFrameAt = now;
+  inferenceBusy = true;
+  var t0 = now;
+  classifySource(video, video.videoWidth, video.videoHeight).then(function (r) {
+    render(smooth(r.probs));
+    if (lastInferenceAt) fpsAvg = fpsAvg ? 0.8 * fpsAvg + 0.2 * (1000 / (now - lastInferenceAt)) : 1000 / (now - lastInferenceAt);
+    lastInferenceAt = now;
+    setBadge('live · ' + (fpsAvg ? fpsAvg.toFixed(1) : '?') + ' fps · ' + Math.round(performance.now() - t0) + ' ms', false);
+  }).catch(function (err) {
+    console.warn(err);
+    setBadge('inference error', true);
+  }).then(function () { inferenceBusy = false; });
+}
+
+function startLoop() { if (!rafId) rafId = requestAnimationFrame(loop); }
+function stopLoop() { if (rafId) cancelAnimationFrame(rafId); rafId = 0; }
+
+/* ---------- camera control ---------- */
+
+function cameraConstraints(facingMode) {
+  return {
+    audio: false,
+    video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 1280 } }
+  };
+}
+
+function stopStream() {
+  if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+  stream = null;
+  video.srcObject = null;
+}
+
+function refreshFlipAvailability() {
+  if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+    navigator.mediaDevices.enumerateDevices().then(function (list) {
+      haveRear = false; haveFront = false;
+      list.forEach(function (d) {
+        if (d.kind !== 'videoinput') return;
+        var label = (d.label || '').toLowerCase();
+        if (/front|user|face/.test(label)) haveFront = true;
+        else haveRear = true;
+      });
+      var cams = list.filter(function (d) { return d.kind === 'videoinput'; }).length;
+      flipBtn.disabled = !(haveRear && haveFront) && cams < 2;
+    }).catch(function () {});
+  }
+}
+
+function nudgePlay() {
+  // iOS can refuse play() outside the original gesture; retry on the next tap.
+  var retry = function () {
+    var p = video.play();
+    if (p && p.catch) p.catch(function () {});
+  };
+  stage.addEventListener('touchend', retry, { once: true });
+  stage.addEventListener('click', retry, { once: true });
+  placeholderText.textContent = 'Tap the preview to start the camera.';
+}
+
+function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    var secure = window.isSecureContext !== false;
+    setStatus('This browser cannot open the camera (' + (secure ? 'getUserMedia unavailable' : 'page is not on HTTPS') +
+      '). Use “Upload photo” instead.', 'err');
+    return Promise.resolve();
+  }
+  setStatus('Requesting the rear camera…');
+  startBtn.disabled = true;
+  stopStream();
+  return navigator.mediaDevices.getUserMedia(cameraConstraints(facing)).then(function (s) {
+    stream = s;
+    video.srcObject = s;
+    var track = s.getVideoTracks()[0];
+    if (track) {
+      track.addEventListener('ended', function () {
+        if (running) { running = false; setStreamUi(false); setStatus('The camera was released by the system. Tap “Start camera” again.', 'err'); }
+      });
+      var caps = track.getCapabilities ? track.getCapabilities() : null;
+      if (caps && caps.facingMode) {
+        haveRear = caps.facingMode.indexOf('environment') >= 0;
+        haveFront = caps.facingMode.indexOf('user') >= 0 || caps.facingMode.indexOf('front') >= 0;
+        flipBtn.disabled = !(haveRear && haveFront);
+      } else {
+        refreshFlipAvailability();
+      }
+    }
+    return video.play();
+  }).then(function () {
+    running = true;
+    selfTestMode = false;
+    selftestToggle.checked = false;
+    smoothed = null; fpsAvg = 0; lastInferenceAt = 0;
+    placeholder.hidden = true;
+    cropGuide.hidden = false;
+    setStreamUi(true);
+    startLoop();
+    setStatus('Classifying live from the rear camera.', 'ok');
+  }).catch(function (err) {
+    console.warn(err);
+    startBtn.disabled = false;
+    setStreamUi(false);
+    var name = err && err.name ? err.name : 'Error';
+    var why = name === 'NotAllowedError' ? 'Camera permission was declined.'
+            : name === 'NotFoundError' || name === 'OverconstrainedError' ? 'No suitable camera was found. Trying any camera…'
+            : name + (err && err.message ? ': ' + err.message : '');
+    setStatus(why, 'err');
+    if ((name === 'NotFoundError' || name === 'OverconstrainedError') && facing === 'environment') {
+      facing = 'user';
+      return navigator.mediaDevices.getUserMedia({ audio: false, video: true }).then(function (s) {
+        stream = s; video.srcObject = s; running = true; placeholder.hidden = true; cropGuide.hidden = false;
+        setStreamUi(true); startLoop(); setStatus('Using the available camera.', 'ok');
+        return video.play();
+      }).catch(function (e2) { setStatus('Could not start the camera (' + e2.name + '). Use “Upload photo” instead.', 'err'); });
+    }
+    nudgePlay();
+  });
+}
+
+function stopCamera() {
+  running = false;
+  stopLoop();
+  stopStream();
+  setStreamUi(false);
+  smoothed = null; fpsAvg = 0; lastInferenceAt = 0;
+  cropGuide.hidden = true;
+  placeholder.hidden = false;
+  placeholderText.textContent = 'Point your phone’s rear camera at a leaf.';
+  setBadge('', false);
+  renderIdle('camera stopped');
+  setStatus('Camera stopped.', 'ok');
+}
+
+function setStreamUi(on) {
+  startBtn.textContent = on ? 'Stop camera' : 'Start camera';
+  startBtn.disabled = false;
+  flipBtn.disabled = flipBtn.disabled || !on;
+}
+
+startBtn.addEventListener('click', function () {
+  if (running) stopCamera(); else startCamera();
+});
+
+flipBtn.addEventListener('click', function () {
+  if (!running) return;
+  facing = facing === 'environment' ? 'user' : 'environment';
+  setStatus('Switching camera…');
+  stopStream();
+  smoothed = null; fpsAvg = 0; lastInferenceAt = 0;
+  navigator.mediaDevices.getUserMedia(cameraConstraints(facing)).then(function (s) {
+    stream = s; video.srcObject = s; running = true;
+    return video.play();
+  }).then(function () {
+    setStatus('Now using the ' + (facing === 'environment' ? 'rear' : 'front') + ' camera.', 'ok');
+  }).catch(function (e) { setStatus('Could not switch camera (' + e.name + ').', 'err'); });
+});
+
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden) { stopLoop(); }
+  else if (running || selfTestMode) { startLoop(); }
+});
+
+/* ---------- photo upload (fallback) ---------- */
+
+function loadBitmap(file) {
+  if (window.createImageBitmap) {
+    // createImageBitmap applies EXIF orientation, which phone photos rely on.
+    try {
+      return window.createImageBitmap(file, { imageOrientation: 'from-image' }).then(function (bmp) {
+        if (!bmp.width || !bmp.height) throw new Error('empty bitmap');
+        return { source: bmp, w: bmp.width, h: bmp.height,
+                 release: function () { if (bmp.close) bmp.close(); } };
+      }).catch(function () { return loadImageEl(file); });
+    } catch (e) { /* old Safari: fall through to the <img> path */ }
+  }
+  return loadImageEl(file);
+}
+
+function loadImageEl(file) {
+  return new Promise(function (resolve, reject) {
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () {
+      resolve({ source: img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height,
+                release: function () { URL.revokeObjectURL(url); } });
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('This file is not a readable image.')); };
+    img.src = url;
+  });
+}
+
+fileInput.addEventListener('change', function () {
+  var file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+  if (!session) { setStatus('The model is still loading — try again in a second.', 'err'); fileInput.value = ''; return; }
+  uploadLabel.classList.add('disabled');
+  setStatus('Classifying “' + file.name + '”…');
+  running = false; stopStream(); stopLoop();
+  loadBitmap(file).then(function (loaded) {
+    return classifySource(loaded.source, loaded.w, loaded.h).then(function (r) {
+      loaded.release();
+      smoothed = null;                 // still images are shown unsmoothed, exactly as computed
+      render(r.probs);
+      placeholder.hidden = true;
+      cropGuide.hidden = false;
+      setStreamUi(false);
+      startBtn.textContent = 'Start camera';
+      var top = 0;
+      for (var i = 1; i < r.probs.length; i++) if (r.probs[i] > r.probs[top]) top = i;
+      setStatus('Photo result: ' + info.classes[top] + ' (' + formatProb(r.probs[top]) + '). Logits: ' +
+                r.logits.map(function (v) { return v.toFixed(3); }).join(', '), 'ok');
+    });
+  }).catch(function (err) {
+    setStatus('Could not classify that image. ' + (err.message || err), 'err');
+  }).then(function () {
+    fileInput.value = '';
+    uploadLabel.classList.remove('disabled');
+  });
+});
+
+/* ---------- self-check against check_expected.json ---------- */
+
+selftestToggle.addEventListener('change', function () {
+  selfTestMode = selftestToggle.checked;
+  if (selfTestMode) {
+    if (running) stopCamera();
+    selftestResult.textContent = '';
+    runSelfCheck();
+  } else {
+    selftestResult.textContent = '';
+  }
+});
+
+function runSelfCheck() {
+  if (!session) { selftestResult.textContent = 'Model still loading…'; return; }
+  selftestResult.textContent = 'Running…';
+  Promise.all([
+    fetch(CHECK_IMAGE, { cache: 'force-cache' }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' for ' + CHECK_IMAGE);
+      return r.blob();
+    }),
+    fetch(CHECK_EXPECTED, { cache: 'force-cache' }).then(function (r) { return r.json(); })
+  ]).then(function (res) {
+    return loadBitmap(res[0]).then(function (loaded) {
+      return classifySource(loaded.source, loaded.w, loaded.h).then(function (r) {
+        loaded.release();
+        var expected = res[1], worst = 0, lines = [];
+        info.classes.forEach(function (name, i) {
+          var exp = expected[name], got = r.probs[i];
+          if (typeof exp === 'number') worst = Math.max(worst, Math.abs(exp - got));
+          lines.push(name + ': ' + got.toFixed(6) + ' (expected ' + (typeof exp === 'number' ? exp.toFixed(6) : 'n/a') + ')');
+        });
+        smoothed = null;
+        render(r.probs);
+        var pass = worst < 0.01;
+        selftestResult.innerHTML = '<span style="color:var(' + (pass ? '--accent' : '--bad') + ');font-weight:700">' +
+          (pass ? 'PASS' : 'FAIL') + '</span> max |difference| = ' + worst.toExponential(2) +
+          '<br><span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.72rem">' +
+          lines.join('<br>') + '</span>';
+        setStatus(pass ? 'Self-check passed against check_expected.json.' : 'Self-check differs from check_expected.json.',
+                 pass ? 'ok' : 'err');
+      });
+    });
+  }).catch(function (err) {
+    selftestResult.textContent = 'Self-check could not run: ' + (err.message || err);
+  });
+}
+
+/* ---------- go ---------- */
+
+loadInfo().then(loadModel).then(function () {
+  setStatus('Model ready. Tap “Start camera”, or upload a photo.', 'ok');
+  renderIdle('ready — start the camera');
+}).catch(function (err) {
+  console.error(err);
+  setStatus('Startup failed: ' + (err && err.message ? err.message : err), 'err');
+});
+
+window.LEAF = {
+  get info() { return info; },
+  get session() { return session; },
+  ready: function () { return !!(info && session); },
+  classifySource: classifySource,
+  normalizeRgbaToChw: normalizeRgbaToChw,
+  centralSquare: centralSquare,
+  softmax: softmax
+};
+</script>
+</body>
+</html>
