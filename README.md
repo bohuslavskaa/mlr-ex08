@@ -47,15 +47,18 @@ than one jump, which keeps the 96 × 96 input area-averaged instead of aliased.
   'from-image'})`, with an `<img>` fallback for browsers that reject the option.
 - **All four probabilities, always visible** — a bar and a percentage per class,
   plus the top class as a headline.
-- **Self-check** — the “Self-check mode” checkbox classifies the bundled
-  `check_image.jpg` with the identical pipeline and prints the deviation from
-  `check_expected.json` on the page.
+- **Self-check** — the “Self-check mode” checkbox runs the model on the raw
+  pixels of `check_image.jpg`, **embedded in the page as base64**, and prints the
+  deviation from `check_expected.json` against a limit of 5 · 10⁻⁴. No JPEG is
+  decoded, so the check measures the pipeline rather than the browser's JPEG
+  decoder — see [Self-check](#self-check). The camera and upload paths are
+  untouched; uploading `check_image.jpg` still runs the full crop → resize →
+  normalize path.
 - **Switch camera** — appears when the device reports more than one camera.
 
 ## Verified
 
-`check_image.jpg` (96 × 96, so the central-square crop and the resize are both
-identity) through the deployed page:
+Self-check (embedded pixels, so nothing is decoded), deployed page, Blink:
 
 | class | page | `check_expected.json` |
 | --- | --- | --- |
@@ -65,14 +68,54 @@ identity) through the deployed page:
 | maple | 0.0000037 | 0.0000037 |
 
 Max absolute deviation **2.8 · 10⁻⁶** — float32/WebAssembly vs. the reference
-run. The same numbers come out of the real “Upload photo” control
-(`apple = 83.0%`). The QR code was generated locally and verified by screenshotting
-the rendered page and decoding the symbol back to the URL above.
+run, which is all that is left once the pixels are the same. The same numbers
+come out of the real “Upload photo” control with `check_image.jpg`
+(`apple = 83.0%`), because Blink decodes this file to exactly the same bytes.
+The QR code was generated locally and verified by screenshotting the rendered
+page and decoding the symbol back to the URL above.
 
 Browsers: the checks above were run in Blink (headless Chrome); the page is
 written for **Safari on iPhone** — iOS 16.4 or newer, since that is where
 onnxruntime-web's WASM-SIMD build is supported. Camera access needs HTTPS, which
 GitHub Pages provides.
+
+## Self-check
+
+Why the check does not just decode `check_image.jpg`: **JPEG decoders do not
+agree**, and this model is sensitive enough to notice.
+
+`check_image.jpg` is 96 × 96 — exactly the model input — so the central-square
+crop and the resize are both identity for it, and the notebook transform that
+produced `check_expected.json` is only `ToTensor` + `Normalize` (no resize, no
+crop at all). Pixels are therefore the only thing that can differ, and they do:
+decoding the same file with Apple's ImageIO instead of the libjpeg the reference
+used changes 3834 of the 27648 bytes, by up to **5 units**. Measured on this
+image, in this model:
+
+| input pixels | max deviation from `check_expected.json` |
+| --- | --- |
+| embedded (reference) pixels, as the page now uses them | **2.8 · 10⁻⁶** |
+| decoded by Blink (headless Chrome) — byte-for-byte the same pixels | 2.8 · 10⁻⁶ |
+| decoded by Apple ImageIO (`sips` on this Mac) | **1.5 · 10⁻²** |
+| the old self-check, ticked in Safari on an iPhone | **1.5 · 10⁻²** |
+| reference pixels + 1 unit added to every byte | 8.7 · 10⁻³ |
+| reference pixels + random ±1 unit per byte | 4.3 · 10⁻³ |
+
+So a deviation of ~1.5 · 10⁻² on an iPhone is the *decoder*, not the
+preprocessing: a whole unit of brightness is already worth ~9 · 10⁻³ here, far
+beyond any tolerance a cross-browser check could carry. Embedding the pixels
+takes the decoder out of the comparison, which is what makes the 5 · 10⁻⁴ limit
+on the page meaningful — everything it now measures is the pipeline and the
+runtime. Live camera frames and uploaded photos are of course still decoded by
+the browser, exactly as before.
+
+To regenerate the payload after changing `check_image.jpg` or `input_size`:
+
+```sh
+python3 -c "import base64,numpy as np;from PIL import Image;\
+print(base64.b64encode(np.asarray(Image.open('check_image.jpg').convert('RGB')).tobytes()).decode())"
+# paste the result into CHECK_PIXELS_B64 in index.html
+```
 
 ## Files
 
@@ -81,7 +124,7 @@ GitHub Pages provides.
 | `index.html` | the whole app: markup, styles, preprocessing, inference, UI, QR code |
 | `leaf_model.onnx` | MobileNetV3 classifier, 4 classes, 6.3 MB |
 | `model_info.json` | class names, input size, normalization constants |
-| `check_image.jpg` | 96 × 96 reference image for the self-check |
+| `check_image.jpg` | 96 × 96 reference image (its pixels are also embedded in `index.html`) |
 | `check_expected.json` | expected probabilities for that image |
 
 ## Run it locally
